@@ -12,14 +12,16 @@ contract Handler is Test {
     ERC20Mock poolToken;
 
     address liquidityProvider = makeAddr("lp");
+    address swapper = makeAddr("swapper");
 
     //Ghost variables
     int256 startingY; // actual balance of weth
     int256 startingX; // actual balance of poolToken
-    int256 expectedDeltaY; // expected balance of weth
-    int256 expectedDeltaX; // expected balance of poolToken
-    int256 actualDeltaY;
-    int256 actualDeltaX;
+    int256 public expectedDeltaY; // expected balance of weth
+    int256 public expectedDeltaX; // expected balance of poolToken
+    int256 public actualDeltaY;
+    int256 public actualDeltaX;
+}
 
     constructor(TSwapPool _pool) {
         pool = _pool;
@@ -34,6 +36,7 @@ contract Handler is Test {
         }
         // ΔX
         // Δx = (B / (1-B)) * x
+        // y * x = k
         uint256 poolTokenAmount = pool.getInputAmountBasedOnOutput(
             outputWeth, 
             poolToken.balanceOf(address(pool)), 
@@ -46,8 +49,23 @@ contract Handler is Test {
 
     startingY = int256(weth.balanceOf(address(this)));
     startingX = int256(poolToken.balanceOf(address(this)));
-    expectedDeltaY = int256(outputWeth);
-    expectedDeltaX = int256(poolTokenAmount);
+    expectedDeltaY = int256(-1) * int256(outputWeth);
+    expectedDeltaX = int256(pool.getPoolTokensToDepositBasedOnWeth(poolTokenAmount));
+
+    if (poolToken.balanceOf(swapper) < poolTokenAmount) {
+        poolToken.mint(swapper, poolTokenAmount - poolToken.balanceOf(swapper) + 1);
+    }
+
+    vm.startPrank(swapper);
+    poolToken.approve(address(pool), type(uint256).max);
+    pool.swapExactOutput(poolToken, weth, outputWeth, uint64(block.timestamp));
+    vm.stopPrank();
+
+        uint256 endingY = weth.balanceOf(address(this));
+        uint256 endingX = poolToken.balanceOf(address(this));
+
+        actualDeltaY = int256(endingY) - int256(startingY);
+        actualDeltaX = int256(endingX) - int256(startingX);
 
     // deposit, swap exactOutput
     function deposit(uint256 wethAmount) public {
