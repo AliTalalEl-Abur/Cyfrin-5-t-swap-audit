@@ -59,6 +59,7 @@ contract TSwapPool is ERC20 {
         uint256 wethWithdrawn,
         uint256 poolTokensWithdrawn
     );
+    // @audit-info 3 events should be indexed if there are more than 3 parameters
     event Swap(
         address indexed swapper,
         IERC20 tokenIn,
@@ -93,6 +94,7 @@ contract TSwapPool is ERC20 {
         string memory liquidityTokenName,
         string memory liquidityTokenSymbol
     ) ERC20(liquidityTokenName, liquidityTokenSymbol) {
+        //@audit-info zero address check
         i_wethToken = IERC20(wethToken);
         i_poolToken = IERC20(poolToken);
     }
@@ -115,6 +117,11 @@ contract TSwapPool is ERC20 {
         uint256 wethToDeposit,
         uint256 minimumLiquidityTokensToMint,
         uint256 maximumPoolTokensToDeposit,
+        // if someone sets a deadline, let´s say, next block
+       // they could still deposit!!!
+       // IMPACT: HIGH a user who expects a deposit to fail, will go through. Severe disruption of functionality
+       // Likelihood: HIGH ALWAYS the case!
+        // @audit-info deadline not being used
         uint64 deadline
     )
         external
@@ -129,6 +136,7 @@ contract TSwapPool is ERC20 {
         }
         if (totalLiquidityTokenSupply() > 0) {
             uint256 wethReserves = i_wethToken.balanceOf(address(this));
+            // @audit-gas don´t need this line
             uint256 poolTokenReserves = i_poolToken.balanceOf(address(this));
             // Our invariant says weth, poolTokens, and liquidity tokens must always have the same ratio after the
             // initial deposit
@@ -300,6 +308,7 @@ contract TSwapPool is ERC20 {
         // inputReserves * outputAmount = inputAmount(outputReserves - outputAmount)
         // inputReserves * outputAmount / (outputReserves - outputAmount) = inputAmount
         // plus fees... ignore them for now
+        // @audit-info - magic numbers
         return
             ((inputReserves * outputAmount) * 10000) /
             ((outputReserves - outputAmount) * 997);
@@ -312,9 +321,13 @@ contract TSwapPool is ERC20 {
         uint256 minOutputAmount,
         uint64 deadline
     )
+        // @audit-info this should be external
         public
         revertIfZero(inputAmount)
         revertIfDeadlinePassed(deadline)
+        // @audit - low
+        // IMPACT: LOW - protocol is giving the wrong return
+        // Likelihood: HIGH ALWAYS the case!
         returns (uint256 output)
     {
         uint256 inputReserves = inputToken.balanceOf(address(this));
@@ -406,8 +419,9 @@ contract TSwapPool is ERC20 {
         ) {
             revert TSwapPool__InvalidToken();
         }
-
+        // @audit breaks protocol invariant!!!
         swap_count++;
+        // Fee on transfer
         if (swap_count >= SWAP_COUNT_MAX) {
             swap_count = 0;
             outputToken.safeTransfer(msg.sender, 1_000_000_000_000_000_000);
