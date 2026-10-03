@@ -129,6 +129,7 @@ contract TSwapPool is ERC20 {
         returns (uint256 liquidityTokensToMint)
     {
         if (wethToDeposit < MINIMUM_WETH_LIQUIDITY) {
+            // @audit-info MINIMUM_WETH_LIQUIDITY is a constant and therefore not required to be emitted
             revert TSwapPool__WethDepositAmountTooLow(
                 MINIMUM_WETH_LIQUIDITY,
                 wethToDeposit
@@ -158,6 +159,10 @@ contract TSwapPool is ERC20 {
             uint256 poolTokensToDeposit = getPoolTokensToDepositBasedOnWeth(
                 wethToDeposit
             );
+            // e if we calculate too many pool tokens to deposit, we revert
+            // deposit 10 WETH
+            // getPoolTokensToDepositBasedOnWeth -> $1,000,000M -> revert
+
             if (maximumPoolTokensToDeposit < poolTokensToDeposit) {
                 revert TSwapPool__MaxPoolTokenDepositTooHigh(
                     maximumPoolTokensToDeposit,
@@ -166,9 +171,13 @@ contract TSwapPool is ERC20 {
             }
 
             // We do the same thing for liquidity tokens. Similar math.
+            // e 10 WETH * 100 LP / 100 WETH
+            // e 10 LP
             liquidityTokensToMint =
                 (wethToDeposit * totalLiquidityTokenSupply()) /
                 wethReserves;
+                // e deposit 10 WETH -> 10% of the LP tokens
+                // e deposit 10 WETH -> 2%, revert  
             if (liquidityTokensToMint < minimumLiquidityTokensToMint) {
                 revert TSwapPool__MinLiquidityTokensToMintTooLow(
                     minimumLiquidityTokensToMint,
@@ -188,6 +197,8 @@ contract TSwapPool is ERC20 {
                 maximumPoolTokensToDeposit,
                 wethToDeposit
             );
+            // @audit-info - it would be better if this was before the `_addLiquidtyMintAndTransfer` call
+           // to follow CEI
             liquidityTokensToMint = wethToDeposit;
         }
     }
@@ -201,7 +212,13 @@ contract TSwapPool is ERC20 {
         uint256 poolTokensToDeposit,
         uint256 liquidityTokensToMint
     ) private {
+        // e follows CEI
         _mint(msg.sender, liquidityTokensToMint);
+        // @audit-low this is backwards! Should be
+        // IMPACT: SUPER LOW - protocol is giving the wrong return/information
+        // LIKELIHOOD: HIGH
+        // (msg.sender,wethToDeposit, poolTokensToDeposit);
+
         emit LiquidityAdded(msg.sender, poolTokensToDeposit, wethToDeposit);
 
         // Interactions
