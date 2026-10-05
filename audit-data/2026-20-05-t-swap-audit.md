@@ -1,3 +1,131 @@
+---
+title: t-swap Audit Report
+author: Ali Talal
+date: October 5, 2026
+header-includes:
+  - \usepackage{titling}
+  - \usepackage{graphicx}
+---
+
+\begin{titlepage}
+    \centering
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.5\textwidth]{logo.pdf} 
+    \end{figure}
+    \vspace*{2cm}
+    {\Huge\bfseries Tswap Protocol Audit Report\par}
+    \vspace{1cm}
+    {\Large Version 1.0\par}
+    \vspace{2cm}
+    {\Large\itshape Cyfrin.io\par}
+    \vfill
+    {\large \today\par}
+\end{titlepage}
+
+\maketitle
+
+<!-- Your report starts here! -->
+
+Prepared by: Ali Talal
+Lead Auditors: 
+- Ali Talal
+
+# Table of Contents
+- [Table of Contents](#table-of-contents)
+- [Protocol Summary](#protocol-summary)
+- [Disclaimer](#disclaimer)
+- [Risk Classification](#risk-classification)
+- [Audit Details](#audit-details)
+  - [Scope](#scope)
+  - [Roles](#roles)
+- [Executive Summary](#executive-summary)
+  - [Issues found](#issues-found)
+- [Findings](#findings)
+  - [High](#high)
+    - [\[H-1\] `TSwapPool::deposit` is missing deadline check causing transactions to complete even after the deadline](#h-1-tswappooldeposit-is-missing-deadline-check-causing-transactions-to-complete-even-after-the-deadline)
+    - [\[H-2\] Incorrect fee calculation in `TSwapPool::getInputAmountBasedOnOutput` causes protocol to take too many tokens from users, resulting in lost fees](#h-2-incorrect-fee-calculation-in-tswappoolgetinputamountbasedonoutput-causes-protocol-to-take-too-many-tokens-from-users-resulting-in-lost-fees)
+    - [\[H-3\] Lack of slippage protection in `TSwapPool::swapExactOutput` causes users to potentially receive way fewer tokens](#h-3-lack-of-slippage-protection-in-tswappoolswapexactoutput-causes-users-to-potentially-receive-way-fewer-tokens)
+    - [\[H-4\] `TSwapPool::sellPoolTokens` mismatches input and output tokens causing users to receive the incorrect amount of tokens](#h-4-tswappoolsellpooltokens-mismatches-input-and-output-tokens-causing-users-to-receive-the-incorrect-amount-of-tokens)
+    - [\[H-5\] In `TSwapPool::_swap` the extra tokens given to users after every `swapCount` breaks the protocol invariant of `x * y = k`](#h-5-in-tswappool_swap-the-extra-tokens-given-to-users-after-every-swapcount-breaks-the-protocol-invariant-of-x--y--k)
+  - [\[M-2\] Rebase, fee-on-transfer, and ERC-777 tokens break protocol invariant](#m-2-rebase-fee-on-transfer-and-erc-777-tokens-break-protocol-invariant)
+  - [Low](#low)
+    - [\[L-1\] `TSwapPool::LiquidityAdded` event has parameters out of order](#l-1-tswappoolliquidityadded-event-has-parameters-out-of-order)
+    - [\[L-2\] Default value returned by `TSwapPool::swapExactInput` results in incorrect return value given](#l-2-default-value-returned-by-tswappoolswapexactinput-results-in-incorrect-return-value-given)
+  - [Informationals](#informationals)
+    - [\[I-1\] `PoolFactory::PoolFactory__PoolDoesNotExist` is not used and should be removed](#i-1-poolfactorypoolfactory__pooldoesnotexist-is-not-used-and-should-be-removed)
+    - [\[I-2\] Lacking zero address checks](#i-2-lacking-zero-address-checks)
+    - [\[I-3\] `PoolFactory::createPool` should use `.symbol()` instead of `.name()`](#i-3-poolfactorycreatepool-should-use-symbol-instead-of-name)
+    - [\[I-4\]: Event is missing `indexed` fields](#i-4-event-is-missing-indexed-fields)
+
+# Protocol Summary
+
+Protocol does X, Y, Z
+
+# Disclaimer
+
+The YOUR_NAME_HERE team makes all effort to find as many vulnerabilities in the code in the given time period, but holds no responsibilities for the findings provided in this document. A security audit by the team is not an endorsement of the underlying business or product. The audit was time-boxed and the review of the code was solely on the security aspects of the Solidity implementation of the contracts.
+
+# Risk Classification
+
+|            |        | Impact |        |     |
+| ---------- | ------ | ------ | ------ | --- |
+|            |        | High   | Medium | Low |
+|            | High   | H      | H/M    | M   |
+| Likelihood | Medium | H/M    | M      | M/L |
+|            | Low    | M      | M/L    | L   |
+
+We use the [CodeHawks](https://docs.codehawks.com/hawks-auditors/how-to-evaluate-a-finding-severity) severity matrix to determine severity. See the documentation for more details.
+
+# Audit Details
+
+The security review of T-Swap was conducted by Ali Talal. The review focused on the Solidity implementations of the pool factory and constant-product AMM pool contracts, with particular attention to the `x * y = k` invariant, fee accounting, slippage/deadline protections, and liquidity provider flows.
+
+## Scope
+
+The audit scope covered the following contracts:
+
+| File | Description |
+| ---- | ----------- |
+| `src/PoolFactory.sol` | Deploys and tracks ERC20/WETH pool instances |
+| `src/TSwapPool.sol` | Constant-product AMM pool for swaps and liquidity |
+
+Out of scope: deployment scripts, tests, mocks, and third-party dependencies under `lib/` (including OpenZeppelin and forge-std).
+
+Compilation target: Solidity `0.8.20` (per `foundry.toml`).
+
+## Roles
+
+| Role | Description |
+| ---- | ----------- |
+| Liquidity Provider (LP) | Deposits WETH and pool tokens into a `TSwapPool`, receives LP tokens representing their share of the pool, and may later withdraw liquidity. |
+| Swapper / User | Permissionlessly swaps between an ERC20 pool token and WETH via `swapExactInput`, `swapExactOutput`, or helper flows such as `sellPoolTokens`. |
+| Pool Factory Deployer / Caller | Any address may call `PoolFactory::createPool` to deploy a new ERC20/WETH pool for a given token. |
+
+There is no privileged admin or owner role in the in-scope contracts; the protocol is designed to operate permissionlessly once deployed.
+
+# Executive Summary
+
+This review assessed T-Swap, a Uniswap-V1-style automated market maker that pairs any ERC20 with WETH. The engagement identified several high-severity issues that can break core protocol guarantees or cause direct user/protocol loss, including an unused deposit deadline, incorrect fee scaling in exact-output swaps, missing slippage protection on `swapExactOutput`, incorrect routing in `sellPoolTokens`, and an incentive mechanism in `_swap` that breaks the `x * y = k` invariant.
+
+Medium- and low-severity findings further highlight token compatibility risks and incorrect event/return-value reporting. Informational items cover missing zero-address checks, unused errors, and event indexing improvements.
+
+Overall, the protocol should not be considered production-ready until the high-severity findings—especially those affecting the constant-product invariant and swap fee/slippage protections—are remediated and re-tested.
+
+## Issues found
+
+
+| Severtity | Number of issues found |
+| --------- | ---------------------- |
+| High      | 5                      |
+| Medium    | 2                      |
+| Low       | 2                      |
+| Info      | 9                      |
+| Total     | 18                     |
+
+
+# Findings
+
 ## High
 
 ### \[H-1\] `TSwapPool::deposit` is missing deadline check causing transactions to complete even after the deadline
@@ -285,6 +413,3 @@ Index event fields make the field more quickly accessible to off-chain tools tha
 - Found in src/PoolFactory.sol: Line: 37
 - Found in src/TSwapPool.sol: Line: 46
 - Found in src/TSwapPool.sol: Line: 43
-
-
-
